@@ -248,3 +248,53 @@ def reset_circuit(servicio):
         return jsonify({"error": f"Servicio '{servicio}' no encontrado"}), 404
     
     cb = circuitos[servicio]
+    estado_anterior = "ABIERTO" if cb["circuito_abierto"] else "CERRADO"
+    cb["fallos"] = 0
+    cb["circuito_abierto"] = False
+    cb["tiempo_apertura"] = None
+    logger.info(f"POST /reset-circuit/{servicio} - Circuito reseteado manualmente (antes: {estado_anterior})")
+    return jsonify({
+        "mensaje": f"Circuit breaker de '{servicio}' reseteado",
+        "estado_anterior": estado_anterior,
+        "estado_actual": "CERRADO"
+    }), 200
+
+@app.route("/health/usuarios")
+def health_usuarios():
+    data, status = hacer_peticion("api-usuarios", "/health")
+    return jsonify(data), status
+
+
+@app.route("/health/transacciones")
+def health_transacciones():
+    data, status = hacer_peticion("api-transacciones", "/health")
+    return jsonify(data), status
+
+
+@app.route("/health/modules")
+def health_modules():
+    data, status = hacer_peticion("api-modules", "/health")
+    return jsonify(data), status
+
+@app.route("/monitoreo")
+def monitoreo():
+    """
+    Muestra un resumen completo del estado del sistema.
+    Consolida health checks y circuit breakers en un solo lugar.
+    Se puede consultar en: http://localhost:5000/monitoreo
+    """
+    servicios = {}
+
+    for nombre, cb in circuitos.items():
+        # Intentamos llamar al health de cada servicio directamente
+        try:
+            url_health = cb["url_base"] + "/health"
+            resp = requests.get(url_health, timeout=2)
+            health = resp.json()
+            disponible = resp.status_code == 200
+        except Exception:
+            health = {"status": "sin respuesta"}
+            disponible = False
+
+        # Estado del circuit breaker
+        if not cb["circuito_abierto"]:
