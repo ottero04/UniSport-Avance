@@ -88,3 +88,93 @@ def get_usuarios():
         usuarios = cursor.fetchall()
         conn.close()
         fin = time.time()
+        logger.info(f"GET /usuarios - OK - {len(usuarios)} usuarios - {fin - inicio:.4f}s")
+        return jsonify(usuarios)
+    except Exception as e:
+        logger.error(f"GET /usuarios - ERROR - {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+
+@app.route("/usuario/<int:usuario_id>")
+def get_usuario(usuario_id):
+    inicio = time.time()
+    logger.info(f"GET /usuario/{usuario_id} - Buscando usuario")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT 
+                nombre, 
+                nickname, 
+                correo, 
+                telefono,
+                saldo 
+            FROM usuarios
+            WHERE id = {usuario_id}"""
+        )
+        usuario = cursor.fetchall()
+        conn.close()
+        fin = time.time()
+        if usuario:
+            logger.info(f"GET /usuario/{usuario_id} - OK - {fin - inicio:.4f}s")
+        else:
+            logger.warning(f"GET /usuario/{usuario_id} - No encontrado - {fin - inicio:.4f}s")
+        return jsonify(usuario)
+    except Exception as e:
+        logger.error(f"GET /usuario/{usuario_id} - ERROR - {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+
+@app.route("/auth", methods=["POST"])
+def auth():
+    inicio = time.time()
+    data = request.get_json()
+    if not data:
+        logger.warning("POST /auth - Datos JSON inválidos")
+        return jsonify({"error": "Se requiere datos JSON"}), 400
+    
+    nickname = data.get("nickname")
+    password_hash = data.get("password_hash")
+    
+    if not nickname or not password_hash:
+        logger.warning(f"POST /auth - Campos faltantes para usuario: {nickname}")
+        return jsonify({"error": "Faltan campos: 'nickname' y 'password_hash' son requeridos"}), 400
+    
+    logger.info(f"POST /auth - Intento de autenticación para: {nickname}")
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute(f"""
+        SELECT id, nombre, nickname, correo, telefono, saldo, password_hash
+        FROM usuarios
+        WHERE nickname = '{nickname}'
+    """)
+    
+    usuario = cursor.fetchone()
+    conn.close()
+    
+    if not usuario:
+        fin = time.time()
+        logger.warning(f"POST /auth - Usuario no encontrado: {nickname} - {fin - inicio:.4f}s")
+        return jsonify({"error": "Usuario no encontrado"}), 404
+    
+    if usuario["password_hash"] != password_hash:
+        fin = time.time()
+        logger.warning(f"POST /auth - Contraseña incorrecta para: {nickname} - {fin - inicio:.4f}s")
+        return jsonify({"error": "Contraseña incorrecta"}), 401
+    
+    usuario.pop("password_hash", None) 
+    fin = time.time()
+    logger.info(f"POST /auth - Autenticación exitosa para: {nickname} - {fin - inicio:.4f}s")
+    return jsonify({
+        "mensaje": "Autenticación exitosa",
+        "usuario": usuario
+    }), 200
+
+
+@app.route("/registro", methods=["POST"])
+def registro():
+    inicio = time.time()
+    data = request.get_json()
+    if not data:
