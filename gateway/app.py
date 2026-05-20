@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS 
 import mysql.connector
 import requests
+import time
 
 
 app = Flask(__name__)
@@ -30,6 +31,7 @@ def get_connection():
 
 # Número de fallos consecutivos que toleramos antes de abrir el circuito
 MAX_FALLOS = 3
+TIEMPO_ESPERA = 30
 
 # Estado de cada microservicio
 # fallos          → cuántos fallos consecutivos lleva
@@ -37,15 +39,18 @@ MAX_FALLOS = 3
 estado_servicios = {
     "api-usuarios": {
         "fallos": 0,
-        "circuito_abierto": False
+        "circuito_abierto": False,
+        "tiempo_apertura": None
     },
     "api-transacciones": {
         "fallos": 0,
-        "circuito_abierto": False
+        "circuito_abierto": False,
+        "tiempo_apertura": None
     },
     "api-modules": {
         "fallos": 0,
-        "circuito_abierto": False
+        "circuito_abierto": False,
+        "tiempo_apertura": None
     }
 }
 
@@ -66,7 +71,8 @@ estado_servicios = {
 def registrar_fallo(servicio):
     """
     Se llama cuando una petición falla.
-    Suma 1 al contador. Si llega a MAX_FALLOS, abre el circuito.
+    Suma 1 al contador. Si llega a MAX_FALLOS, abre el circuito
+    y guarda el momento exacto en que se abrió.
     """
     estado_servicios[servicio]["fallos"] += 1
     fallos_actuales = estado_servicios[servicio]["fallos"]
@@ -75,28 +81,56 @@ def registrar_fallo(servicio):
 
     if fallos_actuales >= MAX_FALLOS:
         estado_servicios[servicio]["circuito_abierto"] = True
-        print(f"[CB] {servicio} - CIRCUITO ABIERTO tras {fallos_actuales} fallos. "
-              f"Bloqueando llamadas.", flush=True)
+        # Guardamos el momento en que se abrió para saber cuándo recuperar
+        estado_servicios[servicio]["tiempo_apertura"]  = time.time()
+        print(f"[CB] {servicio} - CIRCUITO ABIERTO. "
+              f"Reintentará en {TIEMPO_ESPERA} segundos.", flush=True)
 
 
 def registrar_exito(servicio):
     """
     Se llama cuando una petición tiene éxito.
-    Resetea el contador y cierra el circuito si estaba abierto.
+    Resetea el contador, cierra el circuito y limpia el tiempo.
     """
     if estado_servicios[servicio]["fallos"] > 0:
-        print(f"[CB] {servicio} - respondió bien. Reseteando contador.", flush=True)
+        print(f"[CB] {servicio} - respondió bien. Circuito CERRADO.", flush=True)
 
-    estado_servicios[servicio]["fallos"] = 0
+    estado_servicios[servicio]["fallos"]           = 0
     estado_servicios[servicio]["circuito_abierto"] = False
+    estado_servicios[servicio]["tiempo_apertura"]  = None
 
 
 def circuito_esta_abierto(servicio):
     """
-    Consulta si el circuito está abierto (bloqueado).
-    Retorna True si hay que bloquear, False si puede llamar.
+    Consulta si el circuito está abierto.
+    Implementa 3 estados:
+
+      CERRADO   → circuito_abierto = False → llamadas normales
+      ABIERTO   → circuito_abierto = True, no ha pasado el tiempo → bloqueado
+      HALF-OPEN → circuito_abierto = True, ya pasó el tiempo → dejamos pasar
+                  una llamada de prueba para ver si el servicio volvió
     """
-    return estado_servicios[servicio]["circuito_abierto"]
+    cb = estado_servicios[servicio]
+
+    # Estado CERRADO: todo normal
+    if not cb["circuito_abierto"]:
+        return False
+
+    # Calculamos cuánto tiempo lleva abierto
+    segundos_abierto = time.time() - cb["tiempo_apertura"]
+
+    if segundos_abierto >= TIEMPO_ESPERA:
+        # HALF-OPEN: ya esperamos suficiente, dejamos pasar una prueba
+        print(f"[CB] {servicio} - HALF-OPEN: probando si se recuperó "
+              f"({segundos_abierto:.0f}s abierto).", flush=True)
+        cb["circuito_abierto"] = False
+        return False
+
+    # ABIERTO: todavía no cumple el tiempo, seguimos bloqueando
+    restantes = TIEMPO_ESPERA - segundos_abierto
+    print(f"[CB] {servicio} - ABIERTO, bloqueado. "
+          f"Reintenta en {restantes:.0f}s.", flush=True)
+    return True
 
 # ============================================================
 # CIRCUIT BREAKER - Función central de peticiones
