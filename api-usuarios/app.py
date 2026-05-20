@@ -178,3 +178,49 @@ def registro():
     inicio = time.time()
     data = request.get_json()
     if not data:
+        logger.warning("POST /registro - Datos JSON inválidos")
+        return jsonify({"error": "Se requiere datos JSON"}), 400
+    
+    nombre = data.get("nombre")
+    nickname = data.get("nickname")
+    correo = data.get("correo")
+    telefono = data.get("telefono")
+    password_hash = data.get("password_hash")
+    identificacion = data.get("identificacion")
+
+    logger.info(f"POST /registro - Registrando usuario: {nickname}")
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute(f"""
+        SELECT id, nombre, nickname, correo, telefono, saldo, password_hash
+        FROM usuarios
+        WHERE identificacion = '{identificacion}'
+    """)
+    usuario = cursor.fetchone()
+    conn.close()
+
+    if usuario:
+        logger.warning(f"POST /registro - Usuario ya existe: {identificacion}")
+        return jsonify({"error": "Usuario ya existe"}), 404
+
+    if not all([nombre, nickname, correo, telefono, password_hash, identificacion]):
+        logger.warning("POST /registro - Campos faltantes")
+        return jsonify({"error": "Faltan campos requeridos"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        INSERT INTO usuarios (nombre, nickname, correo, telefono, password_hash, identificacion)
+        VALUES ('{nombre}', '{nickname}', '{correo}', '{telefono}', '{password_hash}', '{identificacion}')
+    """)
+    conn.commit()
+    conn.close()
+    fin = time.time()
+    logger.info(f"POST /registro - Usuario registrado: {nickname} - {fin - inicio:.4f}s")
+    return jsonify({"mensaje": "Usuario registrado exitosamente"}), 201
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5002)
