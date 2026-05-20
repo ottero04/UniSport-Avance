@@ -198,3 +198,53 @@ def get_usuario(usuario_id):
 
 @app.route("/transacciones")
 def get_transacciones():
+    data, status = hacer_peticion("api-transacciones", "/transacciones")
+    return jsonify(data), status
+
+
+@app.route("/transaccion/<int:transaccion_id>")
+def get_transaccion(transaccion_id):
+    data, status = hacer_peticion("api-transacciones", f"/transaccion/{transaccion_id}")
+    return jsonify(data), status
+
+
+@app.route("/transacciones/usuario/<int:usuario_id>")
+def get_transacciones_usuario(usuario_id):
+    data, status = hacer_peticion("api-transacciones", f"/transacciones/usuario/{usuario_id}")
+    return jsonify(data), status
+
+
+@app.route("/usuario/auth", methods=["POST"])
+def auth():
+    body = request.get_json()
+    if body is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+    data, status = hacer_peticion("api-usuarios", "/auth", method="POST", data=body)
+    return jsonify(data), status
+
+
+@app.route("/modules")
+def modules():
+    data, status = hacer_peticion("api-modules", "/modules")
+    return jsonify(data), status
+
+
+@app.route("/registro", methods=["POST"])
+def registro():
+    body = request.get_json()
+    if body is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+    data, status = hacer_peticion("api-usuarios", "/registro", method="POST", data=body)
+    return jsonify(data), status
+
+
+
+
+@app.route("/reset-circuit/<servicio>", methods=["POST"])
+def reset_circuit(servicio):
+    """Permite resetear manualmente el circuit breaker de un servicio (útil para pruebas)."""
+    if servicio not in circuitos:
+        logger.warning(f"POST /reset-circuit/{servicio} - Servicio no encontrado")
+        return jsonify({"error": f"Servicio '{servicio}' no encontrado"}), 404
+    
+    cb = circuitos[servicio]
