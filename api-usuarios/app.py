@@ -1,16 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS 
 import mysql.connector
-import logging
 import time
-
-# Configuración de logs estructurados
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [api-usuarios] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -27,9 +18,10 @@ def get_connection():
 
 @app.route("/")
 def info():
-    logger.info("GET / - Info de endpoints solicitada")
+    print("[USUARIOS] Servicio activo", flush=True)
     return jsonify({
-        "endpont": [
+        "mensaje": "Servicio de usuarios funcionando correctamente",
+        "endpoints": [
             "/usuarios",
             "/usuario/<int:usuario_id>",
             "/auth",
@@ -42,7 +34,7 @@ def info():
 @app.route("/health")
 def health():
     inicio = time.time()
-    logger.info("GET /health - Verificando estado del servicio")
+    print("[USUARIOS] Verificando estado del servicio de usuarios...", flush=True)
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -50,32 +42,32 @@ def health():
         cursor.fetchone()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /health - OK - DB conectada - {fin - inicio:.4f}s")
+        print("[USUARIOS] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de verificación: {fin - inicio:.4f}s", flush=True)
         return jsonify({
-            "service": "api-usuarios",
             "status": "ok",
+            "service": "api-usuarios",
             "database": "conectada",
             "response_time": round(fin - inicio, 4)
         }), 200
     except Exception as e:
         fin = time.time()
-        logger.error(f"GET /health - ERROR - DB desconectada - {str(e)}")
+        print(f"[ERROR] Base de datos no disponible - {str(e)}", flush=True)
         return jsonify({
+            "status": "down",
             "service": "api-usuarios",
-            "status": "error",
             "database": "desconectada",
-            "detalle": str(e),
-            "response_time": round(fin - inicio, 4)
+            "detalle": str(e)
         }), 503
 
 
 @app.route("/usuarios")
 def get_usuarios():
     inicio = time.time()
-    logger.info("GET /usuarios - Consultando todos los usuarios")
+    print("[USUARIOS] Consultando usuarios", flush=True)
     try:
         conn = get_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute("""
             SELECT 
                 nombre, 
@@ -88,20 +80,24 @@ def get_usuarios():
         usuarios = cursor.fetchall()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /usuarios - OK - {len(usuarios)} usuarios - {fin - inicio:.4f}s")
-        return jsonify(usuarios)
+        print(f"[USUARIOS] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de consulta de usuarios: {fin - inicio:.4f}s", flush=True)
+        return jsonify({
+            "mensaje": "Listado de usuarios",
+            "usuarios": usuarios
+        })
     except Exception as e:
-        logger.error(f"GET /usuarios - ERROR - {str(e)}")
+        print(f"[ERROR] Error consultando usuarios - {str(e)}", flush=True)
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
 @app.route("/usuario/<int:usuario_id>")
 def get_usuario(usuario_id):
     inicio = time.time()
-    logger.info(f"GET /usuario/{usuario_id} - Buscando usuario")
+    print(f"[USUARIOS] Consultando usuario {usuario_id}", flush=True)
     try:
         conn = get_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute(f"""
             SELECT 
                 nombre, 
@@ -112,16 +108,18 @@ def get_usuario(usuario_id):
             FROM usuarios
             WHERE id = {usuario_id}"""
         )
-        usuario = cursor.fetchall()
+        usuario = cursor.fetchone()
         conn.close()
         fin = time.time()
         if usuario:
-            logger.info(f"GET /usuario/{usuario_id} - OK - {fin - inicio:.4f}s")
+            print(f"[USUARIOS] Servicio funcionando correctamente - 200", flush=True)
+            print(f"[INFO] Tiempo de consulta usuario {usuario_id}: {fin - inicio:.4f}s", flush=True)
+            return jsonify(usuario)
         else:
-            logger.warning(f"GET /usuario/{usuario_id} - No encontrado - {fin - inicio:.4f}s")
-        return jsonify(usuario)
+            print(f"[USUARIOS] Usuario {usuario_id} no encontrado - 404", flush=True)
+            return jsonify({"error": "Usuario no encontrado"}), 404
     except Exception as e:
-        logger.error(f"GET /usuario/{usuario_id} - ERROR - {str(e)}")
+        print(f"[ERROR] Error consultando usuario {usuario_id} - {str(e)}", flush=True)
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
@@ -130,43 +128,42 @@ def auth():
     inicio = time.time()
     data = request.get_json()
     if not data:
-        logger.warning("POST /auth - Datos JSON inválidos")
+        print("[USUARIOS] Solicitud de autenticación inválida - datos JSON faltantes", flush=True)
         return jsonify({"error": "Se requiere datos JSON"}), 400
-    
+
     nickname = data.get("nickname")
     password_hash = data.get("password_hash")
-    
+
     if not nickname or not password_hash:
-        logger.warning(f"POST /auth - Campos faltantes para usuario: {nickname}")
+        print(f"[USUARIOS] Campos faltantes en autenticación", flush=True)
         return jsonify({"error": "Faltan campos: 'nickname' y 'password_hash' son requeridos"}), 400
-    
-    logger.info(f"POST /auth - Intento de autenticación para: {nickname}")
+
+    print(f"[USUARIOS] Autenticando usuario: {nickname}", flush=True)
 
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
-    
     cursor.execute(f"""
         SELECT id, nombre, nickname, correo, telefono, saldo, password_hash
         FROM usuarios
         WHERE nickname = '{nickname}'
     """)
-    
     usuario = cursor.fetchone()
     conn.close()
-    
+
     if not usuario:
         fin = time.time()
-        logger.warning(f"POST /auth - Usuario no encontrado: {nickname} - {fin - inicio:.4f}s")
+        print(f"[USUARIOS] Usuario no encontrado: {nickname} - 404", flush=True)
         return jsonify({"error": "Usuario no encontrado"}), 404
-    
+
     if usuario["password_hash"] != password_hash:
         fin = time.time()
-        logger.warning(f"POST /auth - Contraseña incorrecta para: {nickname} - {fin - inicio:.4f}s")
+        print(f"[USUARIOS] Contraseña incorrecta para: {nickname} - 401", flush=True)
         return jsonify({"error": "Contraseña incorrecta"}), 401
-    
-    usuario.pop("password_hash", None) 
+
+    usuario.pop("password_hash", None)
     fin = time.time()
-    logger.info(f"POST /auth - Autenticación exitosa para: {nickname} - {fin - inicio:.4f}s")
+    print(f"[USUARIOS] Autenticación exitosa para: {nickname} - 200", flush=True)
+    print(f"[INFO] Tiempo de autenticación: {fin - inicio:.4f}s", flush=True)
     return jsonify({
         "mensaje": "Autenticación exitosa",
         "usuario": usuario
@@ -178,37 +175,35 @@ def registro():
     inicio = time.time()
     data = request.get_json()
     if not data:
-        logger.warning("POST /registro - Datos JSON inválidos")
+        print("[USUARIOS] Solicitud de registro inválida - datos JSON faltantes", flush=True)
         return jsonify({"error": "Se requiere datos JSON"}), 400
-    
-    nombre = data.get("nombre")
-    nickname = data.get("nickname")
-    correo = data.get("correo")
-    telefono = data.get("telefono")
+
+    nombre        = data.get("nombre")
+    nickname      = data.get("nickname")
+    correo        = data.get("correo")
+    telefono      = data.get("telefono")
     password_hash = data.get("password_hash")
     identificacion = data.get("identificacion")
 
-    logger.info(f"POST /registro - Registrando usuario: {nickname}")
+    print(f"[USUARIOS] Registrando usuario: {nickname}", flush=True)
 
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
-    
     cursor.execute(f"""
-        SELECT id, nombre, nickname, correo, telefono, saldo, password_hash
-        FROM usuarios
+        SELECT id FROM usuarios
         WHERE identificacion = '{identificacion}'
     """)
     usuario = cursor.fetchone()
     conn.close()
 
     if usuario:
-        logger.warning(f"POST /registro - Usuario ya existe: {identificacion}")
-        return jsonify({"error": "Usuario ya existe"}), 404
+        print(f"[USUARIOS] Usuario ya existe: {identificacion} - 409", flush=True)
+        return jsonify({"error": "Usuario ya existe"}), 409
 
     if not all([nombre, nickname, correo, telefono, password_hash, identificacion]):
-        logger.warning("POST /registro - Campos faltantes")
+        print("[USUARIOS] Campos faltantes en registro", flush=True)
         return jsonify({"error": "Faltan campos requeridos"}), 400
-    
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
@@ -218,7 +213,8 @@ def registro():
     conn.commit()
     conn.close()
     fin = time.time()
-    logger.info(f"POST /registro - Usuario registrado: {nickname} - {fin - inicio:.4f}s")
+    print(f"[USUARIOS] Usuario registrado correctamente: {nickname} - 201", flush=True)
+    print(f"[INFO] Tiempo de registro: {fin - inicio:.4f}s", flush=True)
     return jsonify({"mensaje": "Usuario registrado exitosamente"}), 201
 
 
