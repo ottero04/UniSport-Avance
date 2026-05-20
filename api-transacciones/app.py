@@ -1,6 +1,15 @@
 from flask import Flask, jsonify
 import mysql.connector
+import logging
+import time
 
+# Configuración de logs estructurados
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] [api-transacciones] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -17,68 +26,25 @@ def get_connection():
 
 @app.route("/")
 def info():
+    logger.info("GET / - Info de endpoints solicitada")
     return jsonify({
         "endpont": [
             "/transacciones",
             "/transaccion/<int:transaccion_id>",
             "/transacciones/usuario/<int:usuario_id>",
+            "/health",
         ]
     })
 
 
-@app.route("/transacciones")
-def get_transacciones():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT 
-            id_usuario, 
-            monto, 
-            tipo, 
-            descripcion 
-        FROM transacciones 
-    """)
-    transacciones = cursor.fetchall()
-    conn.close()
-    return transacciones
-
-
-@app.route("/transaccion/<int:transaccion_id>")
-def get_transaccion(transaccion_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT 
-            id_usuario, 
-            monto, 
-            tipo, 
-            descripcion 
-        FROM transacciones 
-        WHERE id = {transaccion_id}"""
-    )
-    transaccion = cursor.fetchall()
-    conn.close()
-    return transaccion
-
-
-@app.route("/transacciones/usuario/<int:usuario_id>")
-def get_transacciones_usuario(usuario_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT 
-            monto, 
-            tipo, 
-            descripcion 
-        FROM transacciones 
-        WHERE id_usuario = {usuario_id}"""
-    )
-    transaccion = cursor.fetchall()
-    conn.close()
-    return transaccion
-
-
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+@app.route("/health")
+def health():
+    inicio = time.time()
+    logger.info("GET /health - Verificando estado del servicio")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        conn.close()
+        fin = time.time()
