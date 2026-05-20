@@ -1,16 +1,7 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 import mysql.connector
-import logging
 import time
-
-# Configuración de logs estructurados
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [api-modules] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -24,10 +15,23 @@ def get_connection():
         port="3306"
     )
 
+
+@app.route("/")
+def info():
+    print("[MODULES] Servicio activo", flush=True)
+    return jsonify({
+        "mensaje": "Servicio de modules funcionando correctamente",
+        "endpoints": [
+            "/modules",
+            "/health",
+        ]
+    })
+
+
 @app.route("/health")
 def health():
     inicio = time.time()
-    logger.info("GET /health - Verificando estado del servicio")
+    print("[MODULES] Verificando estado del servicio de modules...", flush=True)
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -35,28 +39,29 @@ def health():
         cursor.fetchone()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /health - OK - DB conectada - {fin - inicio:.4f}s")
+        print("[MODULES] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de verificación: {fin - inicio:.4f}s", flush=True)
         return jsonify({
-            "service": "api-modules",
             "status": "ok",
+            "service": "api-modules",
             "database": "conectada",
             "response_time": round(fin - inicio, 4)
         }), 200
     except Exception as e:
         fin = time.time()
-        logger.error(f"GET /health - ERROR - DB desconectada - {str(e)}")
+        print(f"[ERROR] Base de datos no disponible - {str(e)}", flush=True)
         return jsonify({
+            "status": "down",
             "service": "api-modules",
-            "status": "error",
             "database": "desconectada",
-            "detalle": str(e),
-            "response_time": round(fin - inicio, 4)
+            "detalle": str(e)
         }), 503
+
 
 @app.route("/modules")
 def get_modules():
     inicio = time.time()
-    logger.info("GET /modules - Consultando módulos activos")
+    print("[MODULES] Consultando módulos activos", flush=True)
     try:
         conn = get_connection()
         cursor = conn.cursor(dictionary=True)
@@ -68,11 +73,16 @@ def get_modules():
         modules = cursor.fetchall()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /modules - OK - {len(modules)} módulos activos - {fin - inicio:.4f}s")
-        return jsonify(modules)
+        print("[MODULES] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de consulta de modules: {fin - inicio:.4f}s", flush=True)
+        return jsonify({
+            "mensaje": "Listado de modules activos",
+            "modules": modules
+        })
     except Exception as e:
-        logger.error(f"GET /modules - ERROR - {str(e)}")
+        print(f"[ERROR] Error consultando modules - {str(e)}", flush=True)
         return jsonify({"error": "Error interno del servidor"}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5003)
