@@ -24,6 +24,35 @@ def get_connection():
         port="3306"
     )
 
+@app.route("/health")
+def health():
+    inicio = time.time()
+    logger.info("GET /health - Verificando estado del servicio")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        conn.close()
+        fin = time.time()
+        logger.info(f"GET /health - OK - DB conectada - {fin - inicio:.4f}s")
+        return jsonify({
+            "service": "api-modules",
+            "status": "ok",
+            "database": "conectada",
+            "response_time": round(fin - inicio, 4)
+        }), 200
+    except Exception as e:
+        fin = time.time()
+        logger.error(f"GET /health - ERROR - DB desconectada - {str(e)}")
+        return jsonify({
+            "service": "api-modules",
+            "status": "error",
+            "database": "desconectada",
+            "detalle": str(e),
+            "response_time": round(fin - inicio, 4)
+        }), 503
+
 @app.route("/modules")
 def get_modules():
     conn = get_connection()
