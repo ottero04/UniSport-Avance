@@ -98,3 +98,53 @@ def get_transaccion(transaccion_id):
     logger.info(f"GET /transaccion/{transaccion_id} - Buscando transacción")
     try:
         conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT 
+                id_usuario, 
+                monto, 
+                tipo, 
+                descripcion 
+            FROM transacciones 
+            WHERE id = {transaccion_id}"""
+        )
+        transaccion = cursor.fetchall()
+        conn.close()
+        fin = time.time()
+        if transaccion:
+            logger.info(f"GET /transaccion/{transaccion_id} - OK - {fin - inicio:.4f}s")
+        else:
+            logger.warning(f"GET /transaccion/{transaccion_id} - No encontrada - {fin - inicio:.4f}s")
+        return jsonify(transaccion)
+    except Exception as e:
+        logger.error(f"GET /transaccion/{transaccion_id} - ERROR - {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+
+@app.route("/transacciones/usuario/<int:usuario_id>")
+def get_transacciones_usuario(usuario_id):
+    inicio = time.time()
+    logger.info(f"GET /transacciones/usuario/{usuario_id} - Consultando transacciones del usuario")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT 
+                monto, 
+                tipo, 
+                descripcion 
+            FROM transacciones 
+            WHERE id_usuario = {usuario_id}"""
+        )
+        transaccion = cursor.fetchall()
+        conn.close()
+        fin = time.time()
+        logger.info(f"GET /transacciones/usuario/{usuario_id} - OK - {len(transaccion)} registros - {fin - inicio:.4f}s")
+        return jsonify(transaccion)
+    except Exception as e:
+        logger.error(f"GET /transacciones/usuario/{usuario_id} - ERROR - {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001)
