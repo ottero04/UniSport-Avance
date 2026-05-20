@@ -49,6 +49,55 @@ estado_servicios = {
     }
 }
 
+# ============================================================
+# CIRCUIT BREAKER - Funciones de control
+#
+# Tres funciones que trabajan juntas:
+#   registrar_fallo()       → cuando el servicio NO responde
+#   registrar_exito()       → cuando el servicio SÍ responde
+#   circuito_esta_abierto() → consulta si debemos bloquear
+#
+# Lógica:
+#   - Cada fallo suma 1 al contador del servicio
+#   - Si llega a MAX_FALLOS → abre el circuito (bloquea)
+#   - Cuando el servicio vuelve → resetea todo
+# ============================================================
+
+def registrar_fallo(servicio):
+    """
+    Se llama cuando una petición falla.
+    Suma 1 al contador. Si llega a MAX_FALLOS, abre el circuito.
+    """
+    estado_servicios[servicio]["fallos"] += 1
+    fallos_actuales = estado_servicios[servicio]["fallos"]
+
+    print(f"[CB] {servicio} - fallo #{fallos_actuales}", flush=True)
+
+    if fallos_actuales >= MAX_FALLOS:
+        estado_servicios[servicio]["circuito_abierto"] = True
+        print(f"[CB] {servicio} - CIRCUITO ABIERTO tras {fallos_actuales} fallos. "
+              f"Bloqueando llamadas.", flush=True)
+
+
+def registrar_exito(servicio):
+    """
+    Se llama cuando una petición tiene éxito.
+    Resetea el contador y cierra el circuito si estaba abierto.
+    """
+    if estado_servicios[servicio]["fallos"] > 0:
+        print(f"[CB] {servicio} - respondió bien. Reseteando contador.", flush=True)
+
+    estado_servicios[servicio]["fallos"] = 0
+    estado_servicios[servicio]["circuito_abierto"] = False
+
+
+def circuito_esta_abierto(servicio):
+    """
+    Consulta si el circuito está abierto (bloqueado).
+    Retorna True si hay que bloquear, False si puede llamar.
+    """
+    return estado_servicios[servicio]["circuito_abierto"]
+
 @app.route("/")
 def get_info():
     try:
