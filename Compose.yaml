@@ -1,0 +1,88 @@
+
+
+services:
+  gateway:
+    container_name: gateway
+    build: ./gateway/
+    restart: always
+    ports:
+      - 5000:5000
+    depends_on:
+      - api-transacciones
+      - api-usuarios
+      - api-modules
+    networks:
+      - gateway-network
+
+
+  api-transacciones:
+    container_name: api-transacciones
+    build: ./api-transacciones/
+    restart: always
+    depends_on:
+      - db
+    networks:
+      - api-network
+      - gateway-network
+
+
+  api-usuarios:
+    container_name: api-usuarios
+    build: ./api-usuarios/
+    restart: always
+    depends_on:
+      - db
+    networks:
+      - api-network
+      - gateway-network
+  
+
+  api-modules:
+    container_name: api-modules
+    build: ./api-modules/
+    restart: always
+    depends_on:
+      - db
+    networks:
+      - api-network
+      - gateway-network
+
+  db:
+    container_name: db
+    image: mariadb:11.4.8-noble
+    restart: always
+    env_file: .env
+    volumes:
+      - ./db/:/docker-entrypoint-initdb.d/
+      - db:/var/lib/mysql
+    networks:
+      - api-network
+      - phpmyadmin-network
+
+
+  phpmyadmin:  
+    container_name: phpmyadmin
+    image: phpmyadmin:5.2.3-apache
+    restart: always
+    env_file: .env
+    depends_on:
+      - db
+    ports:
+      - 8080:80
+    networks:
+      - phpmyadmin-network
+
+
+networks:
+  api-network:
+    driver: bridge
+  
+  phpmyadmin-network:
+    driver: bridge
+
+  gateway-network:
+    driver: bridge
+
+
+volumes:
+  db:
