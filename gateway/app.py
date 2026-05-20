@@ -259,6 +259,61 @@ def registro():
     resp, status = hacer_peticion("api-usuarios", "/registro", method="POST", data=data)
     return jsonify(resp), status
 
+# ============================================================
+# ENDPOINT DE MONITOREO - /estado
+#
+# Permite ver en el navegador el estado actual de todos
+# los circuit breakers del sistema.
+#
+# Cómo usarlo: con Docker corriendo, abrir en el navegador
+#   http://localhost:5000/estado
+#
+# Respuesta cuando todo está bien:
+#   { "api-usuarios": { "estado": "CERRADO", "fallos": 0 } }
+#
+# Respuesta cuando un servicio está caído:
+#   { "api-usuarios": { "estado": "ABIERTO", "recupera_en": "18s" } }
+# ============================================================
+
+@app.route("/estado")
+def ver_estado():
+    resultado = {}
+
+    for nombre, cb in estado_servicios.items():
+
+        if not cb["circuito_abierto"]:
+            # Circuito cerrado: el servicio está respondiendo bien
+            resultado[nombre] = {
+                "estado":  "CERRADO",
+                "fallos":  cb["fallos"],
+                "mensaje": "El servicio está disponible"
+            }
+        else:
+            # Circuito abierto: calculamos cuánto falta para recuperar
+            segundos_abierto = time.time() - cb["tiempo_apertura"]
+            restantes = max(0, TIEMPO_ESPERA - segundos_abierto)
+
+            if restantes > 0:
+                resultado[nombre] = {
+                    "estado":      "ABIERTO",
+                    "fallos":      cb["fallos"],
+                    "recupera_en": f"{restantes:.0f} segundos",
+                    "mensaje":     "Servicio bloqueado, esperando para reintentar"
+                }
+            else:
+                resultado[nombre] = {
+                    "estado":  "HALF-OPEN",
+                    "fallos":  cb["fallos"],
+                    "mensaje": "Probando si el servicio se recuperó"
+                }
+
+    return jsonify({
+        "circuit_breakers": resultado,
+        "configuracion": {
+            "max_fallos":    MAX_FALLOS,
+            "tiempo_espera": f"{TIEMPO_ESPERA} segundos"
+        }
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
