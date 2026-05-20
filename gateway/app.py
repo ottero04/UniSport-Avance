@@ -148,3 +148,53 @@ def estado_sistema():
             "fallos_actuales": cb["fallos"],
             "max_fallos": MAX_FALLOS,
             "tiempo_espera_s": TIEMPO_ESPERA,
+            "segundos_para_recuperacion": round(segundos_restantes, 1) if segundos_restantes is not None else None,
+            "health": health_data,
+            "disponible": health_ok
+        }
+
+    fin = time.time()
+    logger.info(f"GET /estado - OK - {fin - inicio:.4f}s")
+    return jsonify({
+        "gateway": "ok",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "servicios": estado
+    })
+
+
+@app.route("/health")
+def health_gateway():
+    logger.info("GET /health - Gateway verificando estado propio")
+    return jsonify({
+        "service": "gateway",
+        "status": "ok",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }), 200
+
+
+# ─── Endpoints existentes (ahora con Circuit Breaker) ─────────────────────────
+
+@app.route("/")
+def get_info():
+    data_tx, _ = hacer_peticion("api-transacciones", "/")
+    data_us, _ = hacer_peticion("api-usuarios", "/")
+    return jsonify({
+        "api-transacciones": data_tx,
+        "api-usuarios":      data_us
+    })
+
+
+@app.route("/usuarios")
+def get_usuarios():
+    data, status = hacer_peticion("api-usuarios", "/usuarios")
+    return jsonify(data), status
+
+
+@app.route("/usuario/<int:usuario_id>")
+def get_usuario(usuario_id):
+    data, status = hacer_peticion("api-usuarios", f"/usuario/{usuario_id}")
+    return jsonify(data), status
+
+
+@app.route("/transacciones")
+def get_transacciones():
