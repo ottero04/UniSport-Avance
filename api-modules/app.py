@@ -55,19 +55,24 @@ def health():
 
 @app.route("/modules")
 def get_modules():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    cursor.execute("""
-        SELECT id, description, code, status, route
-        FROM modules
-        WHERE status = 1
-    """)
-
-    modules = cursor.fetchall()
-    conn.close()
-
-    return jsonify(modules)
+    inicio = time.time()
+    logger.info("GET /modules - Consultando módulos activos")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id, description, code, status, route
+            FROM modules
+            WHERE status = 1
+        """)
+        modules = cursor.fetchall()
+        conn.close()
+        fin = time.time()
+        logger.info(f"GET /modules - OK - {len(modules)} módulos activos - {fin - inicio:.4f}s")
+        return jsonify(modules)
+    except Exception as e:
+        logger.error(f"GET /modules - ERROR - {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5003)
