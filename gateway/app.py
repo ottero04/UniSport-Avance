@@ -1,221 +1,249 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS 
 import requests
-import logging
 import time
-
-# ─── Logs estructurados ───────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [gateway] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
-# ─── Circuit Breaker - Estado global por servicio ─────────────────────────────
-MAX_FALLOS    = 3       # Fallos consecutivos para abrir el circuito
-TIEMPO_ESPERA = 30      # Segundos antes de intentar recuperación (half-open)
+TIMEOUT = 5
 
-circuitos = {
-    "api-usuarios": {
-        "fallos":          0,
-        "circuito_abierto": False,
-        "tiempo_apertura": None,
-        "url_base":        "http://api-usuarios:5002"
-    },
-    "api-transacciones": {
-        "fallos":          0,
-        "circuito_abierto": False,
-        "tiempo_apertura": None,
-        "url_base":        "http://api-transacciones:5001"
-    },
-    "api-modules": {
-        "fallos":          0,
-        "circuito_abierto": False,
-        "tiempo_apertura": None,
-        "url_base":        "http://api-modules:5003"
-    },
-}
+# ============================================================
+# CIRCUIT BREAKER - Variables de estado por servicio
+# ============================================================
+
+MAX_FALLOS    = 3    # fallos seguidos para abrir el circuito
+TIEMPO_ESPERA = 30   # segundos antes de intentar recuperar
+
+fallos_usuarios      = 0
+fallos_transacciones = 0
+fallos_modules       = 0
+
+circuito_usuarios      = False
+circuito_transacciones = False
+circuito_modules       = False
+
+estado_usuarios      = "CLOSED"
+estado_transacciones = "CLOSED"
+estado_modules       = "CLOSED"
+
+tiempo_apertura_usuarios      = 0
+tiempo_apertura_transacciones = 0
+tiempo_apertura_modules       = 0
 
 
-def circuit_breaker_check(servicio: str) -> tuple[bool, str]:
-    """
-    Verifica el estado del circuit breaker para un servicio.
-    Retorna (puede_llamar: bool, motivo: str)
-    """
-    cb = circuitos[servicio]
-    if cb["circuito_abierto"]:
-        elapsed = time.time() - cb["tiempo_apertura"]
-        if elapsed > TIEMPO_ESPERA:
-            logger.info(f"[CB] {servicio} - Half-open: intentando recuperación después de {elapsed:.1f}s")
-            cb["circuito_abierto"] = False
-            cb["fallos"] = 0
-            cb["tiempo_apertura"] = None
-            return True, "half-open"
+# ============================================================
+# CIRCUIT BREAKER - Función central de peticiones
+#
+# Recibe el nombre del servicio y aplica el CB antes de llamar.
+# Si el circuito está abierto, bloquea la llamada de inmediato.
+# Si está en HALF-OPEN, deja pasar una petición de prueba.
+# ============================================================
+
+def hacer_peticion(servicio, path, method="GET", data=None):
+    global fallos_usuarios, fallos_transacciones, fallos_modules
+    global circuito_usuarios, circuito_transacciones, circuito_modules
+    global estado_usuarios, estado_transacciones, estado_modules
+    global tiempo_apertura_usuarios, tiempo_apertura_transacciones, tiempo_apertura_modules
+
+    # Seleccionamos las variables del servicio correspondiente
+    if servicio == "api-usuarios":
+        url_base       = "http://api-usuarios:5002"
+        fallos         = fallos_usuarios
+        circuito       = circuito_usuarios
+        estado         = estado_usuarios
+        tiempo_apertura = tiempo_apertura_usuarios
+    elif servicio == "api-transacciones":
+        url_base       = "http://api-transacciones:5001"
+        fallos         = fallos_transacciones
+        circuito       = circuito_transacciones
+        estado         = estado_transacciones
+        tiempo_apertura = tiempo_apertura_transacciones
+    else:
+        url_base       = "http://api-modules:5003"
+        fallos         = fallos_modules
+        circuito       = circuito_modules
+        estado         = estado_modules
+        tiempo_apertura = tiempo_apertura_modules
+
+    # --- VERIFICAR EL CIRCUITO ---
+    if circuito:
+        tiempo_actual = time.time()
+        if tiempo_actual - tiempo_apertura >= TIEMPO_ESPERA:
+            # HALF-OPEN: dejamos pasar una petición de prueba
+            print(f"[GATEWAY] {servicio} en estado HALF-OPEN → probando reconexión", flush=True)
+            if servicio == "api-usuarios":
+                estado_usuarios = "HALF-OPEN"
+                circuito_usuarios = False
+            elif servicio == "api-transacciones":
+                estado_transacciones = "HALF-OPEN"
+                circuito_transacciones = False
+            else:
+                estado_modules = "HALF-OPEN"
+                circuito_modules = False
         else:
-            logger.warning(f"[CB] {servicio} - Circuito ABIERTO - bloqueando llamada ({elapsed:.1f}s / {TIEMPO_ESPERA}s)")
-            return False, "abierto"
-    return True, "cerrado"
+            restante = int(TIEMPO_ESPERA - (tiempo_actual - tiempo_apertura))
+            print(f"[GATEWAY] Circuito {servicio} ABIERTO → bloqueando llamada. Reintento en {restante}s", flush=True)
+            return {
+            "error": f"{servicio} no disponible temporalmente",
+            "estado_circuito": "ABIERTO",
+            "mensaje": f"El circuito está abierto. Reintentará en {restante}s"
+        }, 503
 
-
-def circuit_breaker_fallo(servicio: str):
-    """Registra un fallo y abre el circuito si se supera el umbral."""
-    cb = circuitos[servicio]
-    cb["fallos"] += 1
-    logger.warning(f"[CB] {servicio} - Fallo #{cb['fallos']}")
-    if cb["fallos"] >= MAX_FALLOS:
-        cb["circuito_abierto"] = True
-        cb["tiempo_apertura"] = time.time()
-        logger.error(f"[CB] {servicio} - Circuito ABIERTO tras {cb['fallos']} fallos consecutivos")
-
-
-def circuit_breaker_exito(servicio: str):
-    """Registra un éxito y cierra el circuito."""
-    cb = circuitos[servicio]
-    if cb["fallos"] > 0 or cb["circuito_abierto"]:
-        logger.info(f"[CB] {servicio} - Recuperado. Circuito CERRADO")
-    cb["fallos"] = 0
-    cb["circuito_abierto"] = False
-    cb["tiempo_apertura"] = None
-
-
-def hacer_peticion(servicio: str, path: str, method: str = "GET", data=None, timeout: int = 5):
-    """
-    Realiza una petición HTTP con Circuit Breaker integrado.
-    Retorna (response_json, status_code)
-    """
-    puede_llamar, estado = circuit_breaker_check(servicio)
-    if not puede_llamar:
-        return {"error": f"Servicio {servicio} temporalmente bloqueado (circuit breaker abierto)"}, 503
-
-    url = circuitos[servicio]["url_base"] + path
+    # --- HACER LA PETICIÓN ---
+    url = url_base + path
     inicio = time.time()
-    logger.info(f"[GATEWAY] {method} {url}")
+    print(f"[GATEWAY] Consultando {servicio} → {method} {url}", flush=True)
 
     try:
         if method == "POST":
-            resp = requests.post(url, json=data, timeout=timeout)
+            resp = requests.post(url, json=data, timeout=TIMEOUT)
         else:
-            resp = requests.get(url, timeout=timeout)
+            resp = requests.get(url, timeout=TIMEOUT)
 
         fin = time.time()
-        logger.info(f"[GATEWAY] {method} {url} -> {resp.status_code} ({fin - inicio:.4f}s)")
-        circuit_breaker_exito(servicio)
+        print(f"[GATEWAY] {servicio} funcionando correctamente - {resp.status_code}", flush=True)
+        print(f"[INFO] Tiempo {servicio} {method}: {fin - inicio:.4f}s", flush=True)
+
+        # Éxito: cerramos el circuito
+        if servicio == "api-usuarios":
+            if estado_usuarios == "HALF-OPEN":
+                print(f"[GATEWAY] {servicio} recuperado → cerrando circuito", flush=True)
+            fallos_usuarios = 0
+            circuito_usuarios = False
+            estado_usuarios = "CLOSED"
+        elif servicio == "api-transacciones":
+            if estado_transacciones == "HALF-OPEN":
+                print(f"[GATEWAY] {servicio} recuperado → cerrando circuito", flush=True)
+            fallos_transacciones = 0
+            circuito_transacciones = False
+            estado_transacciones = "CLOSED"
+        else:
+            if estado_modules == "HALF-OPEN":
+                print(f"[GATEWAY] {servicio} recuperado → cerrando circuito", flush=True)
+            fallos_modules = 0
+            circuito_modules = False
+            estado_modules = "CLOSED"
+
         return resp.json(), resp.status_code
 
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+    except requests.exceptions.Timeout:
         fin = time.time()
-        logger.error(f"[GATEWAY] {method} {url} -> ERROR ({fin - inicio:.4f}s) - {type(e).__name__}")
-        circuit_breaker_fallo(servicio)
-        return {"error": "Servicio no disponible"}, 503
+        print(f"[ERROR] Timeout en {servicio} - {fin - inicio:.4f}s", flush=True)
+        _registrar_fallo(servicio)
+        return {"error": f"Timeout en {servicio}"}, 504
+
+    except requests.exceptions.ConnectionError:
+        fin = time.time()
+        print(f"[ERROR] {servicio} no disponible - {fin - inicio:.4f}s", flush=True)
+        _registrar_fallo(servicio)
+        return {"error": f"{servicio} no disponible"}, 503
 
 
-# ─── Endpoint de estado del sistema (monitoreo) ───────────────────────────────
+def _registrar_fallo(servicio):
+    """Suma un fallo y abre el circuito si se llega al límite."""
+    global fallos_usuarios, fallos_transacciones, fallos_modules
+    global circuito_usuarios, circuito_transacciones, circuito_modules
+    global estado_usuarios, estado_transacciones, estado_modules
+    global tiempo_apertura_usuarios, tiempo_apertura_transacciones, tiempo_apertura_modules
 
-@app.route("/estado")
-def estado_sistema():
-    """Muestra el estado de todos los circuitos y health de cada servicio."""
-    logger.info("GET /estado - Consultando estado del sistema")
-    inicio = time.time()
-    estado = {}
+    if servicio == "api-usuarios":
+        fallos_usuarios += 1
+        print(f"[ERROR] Fallo api-usuarios número {fallos_usuarios}", flush=True)
+        if estado_usuarios == "HALF-OPEN":
+            circuito_usuarios = True
+            estado_usuarios = "OPEN"
+            tiempo_apertura_usuarios = time.time()
+            print(f"[GATEWAY] HALF-OPEN de api-usuarios falló → reabriendo circuito", flush=True)
+        elif fallos_usuarios >= MAX_FALLOS:
+            circuito_usuarios = True
+            estado_usuarios = "OPEN"
+            tiempo_apertura_usuarios = time.time()
+            print(f"[GATEWAY] Circuito api-usuarios ABIERTO → servicio no disponible temporalmente", flush=True)
 
-    for nombre, cb in circuitos.items():
-        # Determinar estado del circuito
-        if cb["circuito_abierto"]:
-            elapsed = time.time() - cb["tiempo_apertura"]
-            estado_cb = "ABIERTO"
-            segundos_restantes = max(0, TIEMPO_ESPERA - elapsed)
-        else:
-            estado_cb = "CERRADO"
-            segundos_restantes = None
+    elif servicio == "api-transacciones":
+        fallos_transacciones += 1
+        print(f"[ERROR] Fallo api-transacciones número {fallos_transacciones}", flush=True)
+        if estado_transacciones == "HALF-OPEN":
+            circuito_transacciones = True
+            estado_transacciones = "OPEN"
+            tiempo_apertura_transacciones = time.time()
+            print(f"[GATEWAY] HALF-OPEN de api-transacciones falló → reabriendo circuito", flush=True)
+        elif fallos_transacciones >= MAX_FALLOS:
+            circuito_transacciones = True
+            estado_transacciones = "OPEN"
+            tiempo_apertura_transacciones = time.time()
+            print(f"[GATEWAY] Circuito api-transacciones ABIERTO → servicio no disponible temporalmente", flush=True)
 
-        # Intentar health check directo (sin pasar por el CB para monitoreo)
-        try:
-            health_resp = requests.get(
-                cb["url_base"] + "/health", timeout=2
-            )
-            health_data = health_resp.json()
-            health_ok = health_resp.status_code == 200
-        except Exception:
-            health_data = {"status": "sin respuesta"}
-            health_ok = False
-
-        estado[nombre] = {
-            "circuit_breaker": estado_cb,
-            "fallos_actuales": cb["fallos"],
-            "max_fallos": MAX_FALLOS,
-            "tiempo_espera_s": TIEMPO_ESPERA,
-            "segundos_para_recuperacion": round(segundos_restantes, 1) if segundos_restantes is not None else None,
-            "health": health_data,
-            "disponible": health_ok
-        }
-
-    fin = time.time()
-    logger.info(f"GET /estado - OK - {fin - inicio:.4f}s")
-    return jsonify({
-        "gateway": "ok",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "servicios": estado
-    })
-
-
-@app.route("/health")
-def health_gateway():
-    logger.info("GET /health - Gateway verificando estado propio")
-    return jsonify({
-        "service": "gateway",
-        "status": "ok",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-    }), 200
+    else:
+        fallos_modules += 1
+        print(f"[ERROR] Fallo api-modules número {fallos_modules}", flush=True)
+        if estado_modules == "HALF-OPEN":
+            circuito_modules = True
+            estado_modules = "OPEN"
+            tiempo_apertura_modules = time.time()
+            print(f"[GATEWAY] HALF-OPEN de api-modules falló → reabriendo circuito", flush=True)
+        elif fallos_modules >= MAX_FALLOS:
+            circuito_modules = True
+            estado_modules = "OPEN"
+            tiempo_apertura_modules = time.time()
+            print(f"[GATEWAY] Circuito api-modules ABIERTO → servicio no disponible temporalmente", flush=True)
 
 
-# ─── Endpoints existentes (ahora con Circuit Breaker) ─────────────────────────
+# ============================================================
+# ENDPOINTS PRINCIPALES
+# ============================================================
 
 @app.route("/")
-def get_info():
-    data_tx, _ = hacer_peticion("api-transacciones", "/")
-    data_us, _ = hacer_peticion("api-usuarios", "/")
+def home():
     return jsonify({
-        "api-transacciones": data_tx,
-        "api-usuarios":      data_us
+        "mensaje": "API Gateway UniSport funcionando",
+        "servicios": [
+            "api-usuarios",
+            "api-transacciones",
+            "api-modules"
+        ]
     })
 
 
 @app.route("/usuarios")
 def get_usuarios():
+    print("[GATEWAY] Consultando servicio api-usuarios", flush=True)
     data, status = hacer_peticion("api-usuarios", "/usuarios")
     return jsonify(data), status
 
 
 @app.route("/usuario/<int:usuario_id>")
 def get_usuario(usuario_id):
+    print(f"[GATEWAY] Consultando usuario {usuario_id}", flush=True)
     data, status = hacer_peticion("api-usuarios", f"/usuario/{usuario_id}")
     return jsonify(data), status
 
 
 @app.route("/transacciones")
 def get_transacciones():
+    print("[GATEWAY] Consultando servicio api-transacciones", flush=True)
     data, status = hacer_peticion("api-transacciones", "/transacciones")
     return jsonify(data), status
 
 
 @app.route("/transaccion/<int:transaccion_id>")
 def get_transaccion(transaccion_id):
+    print(f"[GATEWAY] Consultando transaccion {transaccion_id}", flush=True)
     data, status = hacer_peticion("api-transacciones", f"/transaccion/{transaccion_id}")
     return jsonify(data), status
 
 
 @app.route("/transacciones/usuario/<int:usuario_id>")
 def get_transacciones_usuario(usuario_id):
+    print(f"[GATEWAY] Consultando transacciones del usuario {usuario_id}", flush=True)
     data, status = hacer_peticion("api-transacciones", f"/transacciones/usuario/{usuario_id}")
     return jsonify(data), status
 
 
 @app.route("/usuario/auth", methods=["POST"])
 def auth():
+    print("[GATEWAY] Autenticando usuario", flush=True)
     body = request.get_json()
     if body is None:
         return jsonify({"error": "Invalid JSON"}), 400
@@ -225,12 +253,14 @@ def auth():
 
 @app.route("/modules")
 def modules():
+    print("[GATEWAY] Consultando servicio api-modules", flush=True)
     data, status = hacer_peticion("api-modules", "/modules")
     return jsonify(data), status
 
 
 @app.route("/registro", methods=["POST"])
 def registro():
+    print("[GATEWAY] Registrando usuario", flush=True)
     body = request.get_json()
     if body is None:
         return jsonify({"error": "Invalid JSON"}), 400
@@ -238,84 +268,141 @@ def registro():
     return jsonify(data), status
 
 
+# ============================================================
+# ENDPOINTS DE MONITOREO - Estado individual por servicio
+# ============================================================
+
+@app.route("/estado/usuarios")
+def estado_usuarios_service():
+    inicio = time.time()
+    print("[MONITOREO] Consultando estado del servicio de usuarios", flush=True)
+    try:
+        response = requests.get("http://api-usuarios:5002/health", timeout=2)
+        fin = time.time()
+        print("[MONITOREO] Servicio de usuarios funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo estado usuarios: {fin - inicio:.4f}s", flush=True)
+        return jsonify(response.json())
+    except:
+        print(f"[ERROR] Estado del servicio de usuarios → no disponible", flush=True)
+        return jsonify({
+            "status": "down",
+            "circuit_breaker": estado_usuarios,
+            "fallos": fallos_usuarios
+        }), 503
 
 
-@app.route("/reset-circuit/<servicio>", methods=["POST"])
-def reset_circuit(servicio):
-    """Permite resetear manualmente el circuit breaker de un servicio (útil para pruebas)."""
-    if servicio not in circuitos:
-        logger.warning(f"POST /reset-circuit/{servicio} - Servicio no encontrado")
-        return jsonify({"error": f"Servicio '{servicio}' no encontrado"}), 404
+@app.route("/estado/transacciones")
+def estado_transacciones_service():
     
-    cb = circuitos[servicio]
-    estado_anterior = "ABIERTO" if cb["circuito_abierto"] else "CERRADO"
-    cb["fallos"] = 0
-    cb["circuito_abierto"] = False
-    cb["tiempo_apertura"] = None
-    logger.info(f"POST /reset-circuit/{servicio} - Circuito reseteado manualmente (antes: {estado_anterior})")
-    return jsonify({
-        "mensaje": f"Circuit breaker de '{servicio}' reseteado",
-        "estado_anterior": estado_anterior,
-        "estado_actual": "CERRADO"
-    }), 200
-
-@app.route("/health/usuarios")
-def health_usuarios():
-    data, status = hacer_peticion("api-usuarios", "/health")
-    return jsonify(data), status
-
-
-@app.route("/health/transacciones")
-def health_transacciones():
-    data, status = hacer_peticion("api-transacciones", "/health")
-    return jsonify(data), status
+    inicio = time.time()
+    print("[MONITOREO] Consultando estado del servicio de transacciones", flush=True)
+    try:
+        response = requests.get("http://api-transacciones:5001/health", timeout=2)
+        fin = time.time()
+        print("[MONITOREO] Servicio de transacciones funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo estado transacciones: {fin - inicio:.4f}s", flush=True)
+        return jsonify(response.json())
+    except:
+        
+        print(f"[ERROR] Estado del servicio de transacciones → no disponible - fallos: {fallos_transacciones}", flush=True)
+        return jsonify({
+            "status": "down",
+            "fallos": fallos_transacciones
+        }), 503
 
 
-@app.route("/health/modules")
-def health_modules():
-    data, status = hacer_peticion("api-modules", "/health")
-    return jsonify(data), status
+@app.route("/estado/modules")
+def estado_modules_service():
+    
+    inicio = time.time()
+    print("[MONITOREO] Consultando estado del servicio de modules", flush=True)
+    try:
+        response = requests.get("http://api-modules:5003/health", timeout=2)
+        fin = time.time()
+        print("[MONITOREO] Servicio de modules funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo estado modules: {fin - inicio:.4f}s", flush=True)
+        return jsonify(response.json())
+    except:
+        
+        print(f"[ERROR] Estado del servicio de modules → no disponible - fallos: {fallos_modules}", flush=True)
+        return jsonify({
+            "status": "down",
+            "fallos": fallos_modules
+        }), 503
+
 
 @app.route("/monitoreo")
 def monitoreo():
-    """
-    Muestra un resumen completo del estado del sistema.
-    Consolida health checks y circuit breakers en un solo lugar.
-    Se puede consultar en: http://localhost:5000/monitoreo
-    """
-    servicios = {}
+    print("[MONITOREO] Consultando estado general de los microservicios", flush=True)
+    estados = {}
+    try:
+        estados["api-usuarios"] = requests.get("http://gateway:5000/estado/usuarios", timeout=2).json()
+    except:
+        estados["api-usuarios"] = {"status": "down"}
+    try:
+        estados["api-transacciones"] = requests.get("http://gateway:5000/estado/transacciones", timeout=2).json()
+    except:
+        estados["api-transacciones"] = {"status": "down"}
+    try:
+        estados["api-modules"] = requests.get("http://gateway:5000/estado/modules", timeout=2).json()
+    except:
+        estados["api-modules"] = {"status": "down"}
 
-    for nombre, cb in circuitos.items():
-        # Intentamos llamar al health de cada servicio directamente
-        try:
-            url_health = cb["url_base"] + "/health"
-            resp = requests.get(url_health, timeout=2)
-            health = resp.json()
-            disponible = resp.status_code == 200
-        except Exception:
-            health = {"status": "sin respuesta"}
-            disponible = False
+    print("[MONITOREO] Monitoreo general completado", flush=True)
+    return jsonify(estados)
 
-        # Estado del circuit breaker
-        if not cb["circuito_abierto"]:
-            estado_cb = "CERRADO"
-        else:
-            segundos_abierto = time.time() - cb["tiempo_apertura"]
-            restantes = max(0, TIEMPO_ESPERA - segundos_abierto)
-            estado_cb = "ABIERTO" if restantes > 0 else "HALF-OPEN"
 
-        servicios[nombre] = {
-            "disponible":      disponible,
-            "circuit_breaker": estado_cb,
-            "fallos":          cb["fallos"],
-            "health":          health
-        }
-
+@app.route("/estado")
+def estado_circuitos():
     return jsonify({
-        "sistema":   "uni-sport",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "servicios": servicios
+        "circuitos": {
+            "api-usuarios": {
+                "estado":               estado_usuarios,
+                "fallos_acumulados":    fallos_usuarios,
+                "max_fallos":           MAX_FALLOS,
+                "tiempo_espera_segundos": TIEMPO_ESPERA
+            },
+            "api-transacciones": {
+                "estado":               estado_transacciones,
+                "fallos_acumulados":    fallos_transacciones,
+                "max_fallos":           MAX_FALLOS,
+                "tiempo_espera_segundos": TIEMPO_ESPERA
+            },
+            "api-modules": {
+                "estado":               estado_modules,
+                "fallos_acumulados":    fallos_modules,
+                "max_fallos":           MAX_FALLOS,
+                "tiempo_espera_segundos": TIEMPO_ESPERA
+            }
+        }
     })
+
+@app.route("/resumen")
+def resumen():
+    print("[RESUMEN] Consultando información general del sistema", flush=True)
+    datos = {}
+
+    try:
+        response = requests.get("http://api-usuarios:5002/usuarios", timeout=3)
+        datos["Servicio de usuarios"] = response.json()
+    except:
+        datos["Servicio de usuarios"] = {"error": "api-usuarios no disponible"}
+
+    try:
+        response = requests.get("http://api-transacciones:5001/transacciones", timeout=3)
+        datos["Servicio de transacciones"] = response.json()
+    except:
+        datos["Servicio de transacciones"] = {"error": "api-transacciones no disponible"}
+
+    try:
+        response = requests.get("http://api-modules:5003/modules", timeout=3)
+        datos["Servicio de modules"] = response.json()
+    except:
+        datos["Servicio de modules"] = {"error": "api-modules no disponible"}
+
+    print("[RESUMEN] Consulta general completada", flush=True)
+    return jsonify(datos)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
