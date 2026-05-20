@@ -98,3 +98,53 @@ def hacer_peticion(servicio: str, path: str, method: str = "GET", data=None, tim
     try:
         if method == "POST":
             resp = requests.post(url, json=data, timeout=timeout)
+        else:
+            resp = requests.get(url, timeout=timeout)
+
+        fin = time.time()
+        logger.info(f"[GATEWAY] {method} {url} -> {resp.status_code} ({fin - inicio:.4f}s)")
+        circuit_breaker_exito(servicio)
+        return resp.json(), resp.status_code
+
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        fin = time.time()
+        logger.error(f"[GATEWAY] {method} {url} -> ERROR ({fin - inicio:.4f}s) - {type(e).__name__}")
+        circuit_breaker_fallo(servicio)
+        return {"error": "Servicio no disponible"}, 503
+
+
+# ─── Endpoint de estado del sistema (monitoreo) ───────────────────────────────
+
+@app.route("/estado")
+def estado_sistema():
+    """Muestra el estado de todos los circuitos y health de cada servicio."""
+    logger.info("GET /estado - Consultando estado del sistema")
+    inicio = time.time()
+    estado = {}
+
+    for nombre, cb in circuitos.items():
+        # Determinar estado del circuito
+        if cb["circuito_abierto"]:
+            elapsed = time.time() - cb["tiempo_apertura"]
+            estado_cb = "ABIERTO"
+            segundos_restantes = max(0, TIEMPO_ESPERA - elapsed)
+        else:
+            estado_cb = "CERRADO"
+            segundos_restantes = None
+
+        # Intentar health check directo (sin pasar por el CB para monitoreo)
+        try:
+            health_resp = requests.get(
+                cb["url_base"] + "/health", timeout=2
+            )
+            health_data = health_resp.json()
+            health_ok = health_resp.status_code == 200
+        except Exception:
+            health_data = {"status": "sin respuesta"}
+            health_ok = False
+
+        estado[nombre] = {
+            "circuit_breaker": estado_cb,
+            "fallos_actuales": cb["fallos"],
+            "max_fallos": MAX_FALLOS,
+            "tiempo_espera_s": TIEMPO_ESPERA,
