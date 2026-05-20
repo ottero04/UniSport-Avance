@@ -1,15 +1,6 @@
 from flask import Flask, jsonify
 import mysql.connector
-import logging
 import time
-
-# Configuración de logs estructurados
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [api-transacciones] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -26,9 +17,10 @@ def get_connection():
 
 @app.route("/")
 def info():
-    logger.info("GET / - Info de endpoints solicitada")
+    print("[TRANSACCIONES] Servicio activo", flush=True)
     return jsonify({
-        "endpont": [
+        "mensaje": "Servicio de transacciones funcionando correctamente",
+        "endpoints": [
             "/transacciones",
             "/transaccion/<int:transaccion_id>",
             "/transacciones/usuario/<int:usuario_id>",
@@ -40,7 +32,7 @@ def info():
 @app.route("/health")
 def health():
     inicio = time.time()
-    logger.info("GET /health - Verificando estado del servicio")
+    print("[TRANSACCIONES] Verificando estado del servicio de transacciones...", flush=True)
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -48,32 +40,32 @@ def health():
         cursor.fetchone()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /health - OK - DB conectada - {fin - inicio:.4f}s")
+        print("[TRANSACCIONES] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de verificación: {fin - inicio:.4f}s", flush=True)
         return jsonify({
-            "service": "api-transacciones",
             "status": "ok",
+            "service": "api-transacciones",
             "database": "conectada",
             "response_time": round(fin - inicio, 4)
         }), 200
     except Exception as e:
         fin = time.time()
-        logger.error(f"GET /health - ERROR - DB desconectada - {str(e)}")
+        print(f"[ERROR] Base de datos no disponible - {str(e)}", flush=True)
         return jsonify({
+            "status": "down",
             "service": "api-transacciones",
-            "status": "error",
             "database": "desconectada",
-            "detalle": str(e),
-            "response_time": round(fin - inicio, 4)
+            "detalle": str(e)
         }), 503
 
 
 @app.route("/transacciones")
 def get_transacciones():
     inicio = time.time()
-    logger.info("GET /transacciones - Consultando todas las transacciones")
+    print("[TRANSACCIONES] Consultando transacciones", flush=True)
     try:
         conn = get_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute("""
             SELECT 
                 id_usuario, 
@@ -85,20 +77,24 @@ def get_transacciones():
         transacciones = cursor.fetchall()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /transacciones - OK - {len(transacciones)} registros - {fin - inicio:.4f}s")
-        return jsonify(transacciones)
+        print("[TRANSACCIONES] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de consulta de transacciones: {fin - inicio:.4f}s", flush=True)
+        return jsonify({
+            "mensaje": "Listado de transacciones",
+            "transacciones": transacciones
+        })
     except Exception as e:
-        logger.error(f"GET /transacciones - ERROR - {str(e)}")
+        print(f"[ERROR] Error consultando transacciones - {str(e)}", flush=True)
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
 @app.route("/transaccion/<int:transaccion_id>")
 def get_transaccion(transaccion_id):
     inicio = time.time()
-    logger.info(f"GET /transaccion/{transaccion_id} - Buscando transacción")
+    print(f"[TRANSACCIONES] Consultando transaccion {transaccion_id}", flush=True)
     try:
         conn = get_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute(f"""
             SELECT 
                 id_usuario, 
@@ -108,26 +104,28 @@ def get_transaccion(transaccion_id):
             FROM transacciones 
             WHERE id = {transaccion_id}"""
         )
-        transaccion = cursor.fetchall()
+        transaccion = cursor.fetchone()
         conn.close()
         fin = time.time()
         if transaccion:
-            logger.info(f"GET /transaccion/{transaccion_id} - OK - {fin - inicio:.4f}s")
+            print(f"[TRANSACCIONES] Servicio funcionando correctamente - 200", flush=True)
+            print(f"[INFO] Tiempo de consulta transaccion {transaccion_id}: {fin - inicio:.4f}s", flush=True)
+            return jsonify(transaccion)
         else:
-            logger.warning(f"GET /transaccion/{transaccion_id} - No encontrada - {fin - inicio:.4f}s")
-        return jsonify(transaccion)
+            print(f"[TRANSACCIONES] Transaccion {transaccion_id} no encontrada - 404", flush=True)
+            return jsonify({"error": "Transaccion no encontrada"}), 404
     except Exception as e:
-        logger.error(f"GET /transaccion/{transaccion_id} - ERROR - {str(e)}")
+        print(f"[ERROR] Error consultando transaccion {transaccion_id} - {str(e)}", flush=True)
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
 @app.route("/transacciones/usuario/<int:usuario_id>")
 def get_transacciones_usuario(usuario_id):
     inicio = time.time()
-    logger.info(f"GET /transacciones/usuario/{usuario_id} - Consultando transacciones del usuario")
+    print(f"[TRANSACCIONES] Consultando transacciones del usuario {usuario_id}", flush=True)
     try:
         conn = get_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute(f"""
             SELECT 
                 monto, 
@@ -136,13 +134,17 @@ def get_transacciones_usuario(usuario_id):
             FROM transacciones 
             WHERE id_usuario = {usuario_id}"""
         )
-        transaccion = cursor.fetchall()
+        transacciones = cursor.fetchall()
         conn.close()
         fin = time.time()
-        logger.info(f"GET /transacciones/usuario/{usuario_id} - OK - {len(transaccion)} registros - {fin - inicio:.4f}s")
-        return jsonify(transaccion)
+        print(f"[TRANSACCIONES] Servicio funcionando correctamente - 200", flush=True)
+        print(f"[INFO] Tiempo de consulta transacciones usuario {usuario_id}: {fin - inicio:.4f}s", flush=True)
+        return jsonify({
+            "mensaje": f"Transacciones del usuario {usuario_id}",
+            "transacciones": transacciones
+        })
     except Exception as e:
-        logger.error(f"GET /transacciones/usuario/{usuario_id} - ERROR - {str(e)}")
+        print(f"[ERROR] Error consultando transacciones usuario {usuario_id} - {str(e)}", flush=True)
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
