@@ -162,131 +162,68 @@ def hacer_peticion(servicio, path, method="GET", data=None):
 
 @app.route("/")
 def get_info():
-    try:
-            transacciones = requests.get("http://api-transacciones:5001", timeout= 5).json()
-    except requests.exceptions.ConnectionError:
-            print("Error de conexión con api-transacciones", flush=True)
-            transacciones = {"error": "Servicio no disponible"}, 503
-    except requests.exceptions.Timeout:
-            print("Tiempo de espera agotado para api-transacciones", flush=True)
-            transacciones = {"error": "Tiempo de espera agotado"}, 503
-    try:
-            usuarios = requests.get("http://api-usuarios:5002", timeout=5).json()
-
-    except requests.exceptions.ConnectionError:
-            print("Error de conexión con api-usuarios", flush=True)
-            usuarios = {"error": "Servicio no disponible"}, 503
-    except requests.exceptions.Timeout:
-            print("Tiempo de espera agotado para api-usuarios", flush=True)
-            usuarios = {"error": "Tiempo de espera agotado"}, 503
-
+    data_tx, _ = hacer_peticion("api-transacciones", "/")
+    data_us, _ = hacer_peticion("api-usuarios", "/")
     return jsonify({
-            "api-transacciones": transacciones,
-            "api-usuarios": usuarios
-        })
+        "api-transacciones": data_tx,
+        "api-usuarios": data_us
+    })
 
 
 @app.route("/usuarios")
 def get_usuarios():
-    try:
-        usuarios = requests.get("http://api-usuarios:5002/usuarios", timeout=5).json()
-        return jsonify(usuarios)
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-usuarios", flush=True)
-        return jsonify({"error": "Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-usuarios", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    # Antes: try/except aquí directamente
+    # Ahora: hacer_peticion() aplica el CB automáticamente
+    data, status = hacer_peticion("api-usuarios", "/usuarios")
+    return jsonify(data), status
 
 
 @app.route("/usuario/<int:usuario_id>")
 def get_usuario(usuario_id):
-    try:
-        usuarios = requests.get(f"http://api-usuarios:5002/usuario/{usuario_id}", timeout=5).json()
-        return jsonify(usuarios)
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-usuarios", flush=True)
-        return jsonify({"error": "Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-usuarios", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    data, status = hacer_peticion("api-usuarios", f"/usuario/{usuario_id}")
+    return jsonify(data), status
 
 
 @app.route("/transacciones")
 def get_transacciones():
-    try:
-        usuarios = requests.get(f"http://api-transacciones:5001/transacciones", timeout=5).json()
-        return jsonify(usuarios)
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-transacciones", flush=True)
-        return jsonify({"error": "Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-transacciones", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    data, status = hacer_peticion("api-transacciones", "/transacciones")
+    return jsonify(data), status
 
 
 @app.route("/transaccion/<int:transaccion_id>")
 def get_transaccion(transaccion_id):
-    try:
-        usuarios = requests.get(f"http://api-transacciones:5001/transaccion/{transaccion_id}", timeout=5).json()
-        return jsonify(usuarios)
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-transacciones", flush=True)
-        return jsonify({"error": "Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-transacciones", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    data, status = hacer_peticion("api-transacciones", f"/transaccion/{transaccion_id}")
+    return jsonify(data), status
 
 
 @app.route("/transacciones/usuario/<int:usuario_id>")
 def get_transacciones_usuario(usuario_id):
-    try:
-        usuarios = requests.get(f"http://api-transacciones:5001/transacciones/usuario/{usuario_id}", timeout=5).json()
-        return jsonify(usuarios)
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-transacciones", flush=True)
-        return jsonify({"error": "Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-transacciones", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    data, status = hacer_peticion("api-transacciones", f"/transacciones/usuario/{usuario_id}")
+    return jsonify(data), status
 
 
 @app.route("/usuario/auth", methods=["POST"])
 def auth():
-    try:
-        data = request.get_json()
-        if data is None:
-            return jsonify({"error": "Invalid JSON"},400) 
-        resp = requests.post("http://api-usuarios:5002/auth", json=data, timeout=5)
-        return jsonify(resp.json())
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-usuarios", flush=True)
-        return jsonify({"error": "Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-usuarios", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    data = request.get_json()
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+    resp, status = hacer_peticion("api-usuarios", "/auth", method="POST", data=data)
+    return jsonify(resp), status
 
 
 @app.route("/modules")
 def modules():
-    resp = requests.get("http://api-modules:5003/modules")
-    return jsonify(resp.json()), resp.status_code
+    data, status = hacer_peticion("api-modules", "/modules")
+    return jsonify(data), status
 
 
 @app.route("/registro", methods=["POST"])
 def registro():
-    try:
-        data = request.get_json()
-        if data is None:
-            return jsonify({"error": "Invalid JSON"}), 400
-        resp = requests.post("http://api-usuarios:5002/registro", json=data, timeout=5)
-        return jsonify(resp.json())
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión con api-usuarios", flush=True)
-        return jsonify({"error":"Servicio no disponible"}, 503)
-    except requests.exceptions.Timeout:
-        print("Tiempo de espera agotado para api-usuarios", flush=True)
-        return jsonify({"error": "Tiempo de espera agotado"}, 503)
+    data = request.get_json()
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+    resp, status = hacer_peticion("api-usuarios", "/registro", method="POST", data=data)
+    return jsonify(resp), status
 
 
 if __name__ == "__main__":
