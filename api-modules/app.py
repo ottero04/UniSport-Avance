@@ -1,6 +1,16 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 import mysql.connector
+import logging
+import time
+
+# Configuración de logs estructurados
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] [api-modules] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
