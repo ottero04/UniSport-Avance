@@ -298,3 +298,24 @@ def monitoreo():
 
         # Estado del circuit breaker
         if not cb["circuito_abierto"]:
+            estado_cb = "CERRADO"
+        else:
+            segundos_abierto = time.time() - cb["tiempo_apertura"]
+            restantes = max(0, TIEMPO_ESPERA - segundos_abierto)
+            estado_cb = "ABIERTO" if restantes > 0 else "HALF-OPEN"
+
+        servicios[nombre] = {
+            "disponible":      disponible,
+            "circuit_breaker": estado_cb,
+            "fallos":          cb["fallos"],
+            "health":          health
+        }
+
+    return jsonify({
+        "sistema":   "uni-sport",
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "servicios": servicios
+    })
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
